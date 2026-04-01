@@ -1,0 +1,9 @@
+Hi {{name}},
+
+Thank you for reaching out through my portfolio!
+
+I have received your message regarding "{{reason}}" and will review it shortly. I will get back to you at this email address as soon as possible.
+
+Best regards,
+
+Shubham

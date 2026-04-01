@@ -1,0 +1,14 @@
+Hi Shubham,
+
+{{name}} this side.
+
+I want to connect with you because: {{reason}}
+
+Message:
+{{description}}
+
+Reply directly to: {{email}}
+
+I hope to hear from you soon.
+
+For more details, go to: {{domain_link}}/loginls
