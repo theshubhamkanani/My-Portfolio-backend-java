@@ -23,12 +23,13 @@ public class Education {
     @Column(name = "from_date", nullable = false)
     private LocalDate fromDate;
 
-    // This field is nullable. A null value here will represent "Present"
     @Column(name = "to_date")
     private LocalDate toDate;
 
-    // Using TEXT for the description allows for longer paragraphs if needed
     @Column(name = "short_description", columnDefinition = "TEXT")
     private String shortDescription;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "profile_id")
+    private Profile profile;
 }

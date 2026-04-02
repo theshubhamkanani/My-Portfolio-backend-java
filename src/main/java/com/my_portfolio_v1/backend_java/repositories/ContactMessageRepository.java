@@ -4,7 +4,12 @@ import com.my_portfolio_v1.backend_java.models.ContactMessage;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+
 @Repository
 public interface ContactMessageRepository extends JpaRepository<ContactMessage, Long> {
-    // Standard CRUD operations are ready to go
+    List<ContactMessage> findByEmailContainingIgnoreCaseOrReasonContainingIgnoreCaseOrderByCreatedAtDesc(
+            String email,
+            String reason
+    );
 }

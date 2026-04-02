@@ -19,7 +19,11 @@ public class Headline {
     private String text;
 
     @Column(nullable = false)
-    private String type; // e.g., "HERO_TITLE", "SECTION_SUBTITLE"
+    private String type;
+
+    @Builder.Default
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean live = false;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "profile_id")

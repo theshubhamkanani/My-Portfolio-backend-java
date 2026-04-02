@@ -8,8 +8,6 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
-import java.util.Collections;
-
 @Service
 @RequiredArgsConstructor
 public class CustomUserDetailsService implements UserDetailsService {
@@ -18,15 +16,25 @@ public class CustomUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        // 1. Fetch user from your database
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + email));
 
-        // 2. Convert your User entity into Spring's UserDetails object
         return org.springframework.security.core.userdetails.User.builder()
                 .username(user.getEmail())
-                .password(user.getPassword()) // This must be the BCrypt hashed password
-                .roles(user.getDesignation()) // e.g., "ADMIN"
+                .password(user.getPassword())
+                .roles(normalizeRole(user.getDesignation()))
                 .build();
+    }
+
+    private String normalizeRole(String rawRole) {
+        if (rawRole == null || rawRole.isBlank()) {
+            throw new UsernameNotFoundException("User role is missing");
+        }
+
+        return rawRole.trim()
+                .toUpperCase()
+                .replace("ROLE_", "")
+                .replace(" ", "_")
+                .replace("-", "_");
     }
 }

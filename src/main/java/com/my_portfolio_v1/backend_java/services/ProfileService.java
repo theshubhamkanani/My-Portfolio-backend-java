@@ -1,13 +1,19 @@
 package com.my_portfolio_v1.backend_java.services;
 
-import com.my_portfolio_v1.backend_java.dtos.*;
-import com.my_portfolio_v1.backend_java.models.*;
-import com.my_portfolio_v1.backend_java.repositories.*;
+import com.my_portfolio_v1.backend_java.dtos.HighlightDTO;
+import com.my_portfolio_v1.backend_java.dtos.ProfileDTO;
+import com.my_portfolio_v1.backend_java.models.Description;
+import com.my_portfolio_v1.backend_java.models.Headline;
+import com.my_portfolio_v1.backend_java.models.Highlight;
+import com.my_portfolio_v1.backend_java.models.Profile;
+import com.my_portfolio_v1.backend_java.repositories.ProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -15,82 +21,175 @@ import java.util.stream.Collectors;
 public class ProfileService {
 
     private final ProfileRepository profileRepository;
-    private final HeadlineRepository headlineRepository;
-    private final DescriptionRepository descriptionRepository;
-    private final HighlightRepository highlightRepository;
+    private final ProfileContextService profileContextService;
+    private final ProfileImageStorageService profileImageStorageService;
 
-    public ProfileDTO getCompleteProfile(Long profileId) {
-        Profile profile = profileRepository.findById(profileId)
-                .orElseThrow(() -> new RuntimeException("Profile not found"));
 
+    @Transactional(readOnly = true)
+    public ProfileDTO getCompleteProfile() {
+        Profile profile = profileContextService.getActiveProfileOrFirstOrNull();
+
+        if (profile == null) {
+            return emptyProfile();
+        }
+
+        return mapToDTO(profile);
+    }
+
+    @Transactional
+    public ProfileDTO getAdminProfile(Long profileId) {
+        Profile profile = profileId != null
+                ? profileContextService.requireProfile(profileId)
+                : profileContextService.resolveProfileForWrite(null);
+
+        return mapToDTO(profile);
+    }
+
+    @Transactional
+    public List<ProfileDTO> getAllProfiles() {
+        List<Profile> profiles = profileRepository.findAllByOrderByIdAsc();
+
+        if (profiles.isEmpty()) {
+            return List.of(mapToDTO(profileContextService.resolveProfileForWrite(null)));
+        }
+
+        return profiles.stream()
+                .sorted(Comparator.comparing(Profile::isLive).reversed().thenComparing(Profile::getId))
+                .map(this::mapToDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public ProfileDTO createProfile(ProfileDTO dto) {
+        Profile profile = new Profile();
+        applyProfileFields(profile, dto);
+        profile.setLive(profileRepository.count() == 0);
+        return mapToDTO(profileRepository.save(profile));
+    }
+
+    @Transactional
+    public ProfileDTO updateProfile(ProfileDTO dto) {
+        Profile profile = dto.getId() != null
+                ? profileContextService.requireProfile(dto.getId())
+                : profileContextService.resolveProfileForWrite(null);
+
+        boolean currentLiveState = profile.isLive();
+        applyProfileFields(profile, dto);
+        profile.setLive(currentLiveState);
+
+        return mapToDTO(profileRepository.save(profile));
+    }
+
+    @Transactional
+    public ProfileDTO updateProfile(Long id, ProfileDTO dto) {
+        Profile profile = profileContextService.requireProfile(id);
+
+        boolean currentLiveState = profile.isLive();
+        applyProfileFields(profile, dto);
+        profile.setLive(currentLiveState);
+
+        return mapToDTO(profileRepository.save(profile));
+    }
+
+    @Transactional
+    public ProfileDTO activateProfile(Long id) {
+        profileContextService.requireProfile(id);
+
+        List<Profile> profiles = profileRepository.findAllByOrderByIdAsc();
+        for (Profile profile : profiles) {
+            profile.setLive(Objects.equals(profile.getId(), id));
+        }
+
+        profileRepository.saveAll(profiles);
+
+        return mapToDTO(profileContextService.requireProfile(id));
+    }
+
+    private void applyProfileFields(Profile profile, ProfileDTO dto) {
+        if (!Objects.equals(profile.getProfilePhotoUrl(), dto.getProfilePhotoUrl())) {
+            profileImageStorageService.deleteManagedProfileImage(profile.getProfilePhotoUrl());
+        }
+
+        profile.setFullName(dto.getFullName());
+        profile.setProfilePhotoUrl(dto.getProfilePhotoUrl());
+        profile.setTitleLine(dto.getTitleLine());
+        profile.setGithubLink(dto.getGithubLink());
+        profile.setLinkedinLink(dto.getLinkedinLink());
+        profile.setEmail(dto.getEmail());
+    }
+
+    private ProfileDTO emptyProfile() {
         return ProfileDTO.builder()
+                .live(false)
+                .heroHeadline(null)
+                .heroDescription(null)
+                .aboutHeadline(null)
+                .aboutDescription(null)
+                .highlights(List.of())
+                .build();
+    }
+
+    private ProfileDTO mapToDTO(Profile profile) {
+        return ProfileDTO.builder()
+                .id(profile.getId())
                 .fullName(profile.getFullName())
                 .profilePhotoUrl(profile.getProfilePhotoUrl())
                 .titleLine(profile.getTitleLine())
                 .githubLink(profile.getGithubLink())
                 .linkedinLink(profile.getLinkedinLink())
                 .email(profile.getEmail())
-                .heroHeadlines(filterHeadlines(profile.getHeadlines(), "HERO"))
-                .aboutDescriptions(filterDescriptions(profile.getDescriptions(), "ABOUT"))
-                .highlights(mapHighlights(profile.getHighlights()))
+                .live(profile.isLive())
+                .heroHeadline(resolveHeadlineText(profile.getHeadlines(), "HERO"))
+                .heroDescription(resolveDescriptionText(profile.getDescriptions(), "HERO"))
+                .aboutHeadline(resolveHeadlineText(profile.getHeadlines(), "ABOUT"))
+                .aboutDescription(resolveDescriptionText(profile.getDescriptions(), "ABOUT"))
+                .highlights(mapHighlights(profile.getHighlights(), profile.getId()))
                 .build();
     }
 
-    @Transactional
-    public Profile updateProfile(Profile updatedProfile) {
-        // 1. Verify existence (Production rule: never trust client IDs blindly)
-        Profile existingProfile = profileRepository.findById(updatedProfile.getId())
-                .orElseThrow(() -> new RuntimeException("Profile not found"));
-
-        // 2. Update core fields
-        existingProfile.setFullName(updatedProfile.getFullName());
-        existingProfile.setProfilePhotoUrl(updatedProfile.getProfilePhotoUrl());
-        existingProfile.setTitleLine(updatedProfile.getTitleLine());
-        existingProfile.setGithubLink(updatedProfile.getGithubLink());
-        existingProfile.setLinkedinLink(updatedProfile.getLinkedinLink());
-        existingProfile.setEmail(updatedProfile.getEmail());
-
-        // 3. Handle Child Entities (Linking them to the parent profile)
-        if (updatedProfile.getHeadlines() != null) {
-            updatedProfile.getHeadlines().forEach(h -> h.setProfile(existingProfile));
-        }
-        if (updatedProfile.getDescriptions() != null) {
-            updatedProfile.getDescriptions().forEach(d -> d.setProfile(existingProfile));
-        }
-        if (updatedProfile.getHighlights() != null) {
-            updatedProfile.getHighlights().forEach(hi -> hi.setProfile(existingProfile));
+    private String resolveHeadlineText(List<Headline> headlines, String type) {
+        if (headlines == null) {
+            return null;
         }
 
-        return profileRepository.save(existingProfile);
-    }
-
-    // --- HELPER METHODS ---
-
-    private List<String> filterHeadlines(List<Headline> headlines, String type) {
-        if (headlines == null) return List.of();
         return headlines.stream()
-                .filter(h -> h.getType() != null && h.getType().equalsIgnoreCase(type))
+                .filter(Objects::nonNull)
+                .filter(item -> item.getType() != null && item.getType().equalsIgnoreCase(type))
+                .sorted(Comparator.comparing(Headline::isLive).reversed().thenComparing(Headline::getId))
                 .map(Headline::getText)
-                .collect(Collectors.toList());
+                .filter(text -> text != null && !text.isBlank())
+                .findFirst()
+                .orElse(null);
     }
 
-    private List<String> filterDescriptions(List<Description> descriptions, String type) {
-        if (descriptions == null) return List.of();
+    private String resolveDescriptionText(List<Description> descriptions, String type) {
+        if (descriptions == null) {
+            return null;
+        }
+
         return descriptions.stream()
-                .filter(d -> d.getType() != null && d.getType().equalsIgnoreCase(type))
+                .filter(Objects::nonNull)
+                .filter(item -> item.getType() != null && item.getType().equalsIgnoreCase(type))
+                .sorted(Comparator.comparing(Description::isLive).reversed().thenComparing(Description::getId))
                 .map(Description::getText)
-                .collect(Collectors.toList());
+                .filter(text -> text != null && !text.isBlank())
+                .findFirst()
+                .orElse(null);
     }
 
-    private List<HighlightDTO> mapHighlights(List<Highlight> highlights) {
-        if (highlights == null) return List.of();
+
+    private List<HighlightDTO> mapHighlights(List<Highlight> highlights, Long profileId) {
+        if (highlights == null) {
+            return List.of();
+        }
+
         return highlights.stream()
-                .map(h -> {
-                    HighlightDTO dto = new HighlightDTO();
-                    dto.setText(h.getText());
-                    dto.setIconName(h.getIconName());
-                    return dto;
-                })
+                .filter(Objects::nonNull)
+                .map(h -> HighlightDTO.builder()
+                        .id(h.getId())
+                        .text(h.getText())
+                        .profileId(profileId)
+                        .build())
                 .collect(Collectors.toList());
     }
 }

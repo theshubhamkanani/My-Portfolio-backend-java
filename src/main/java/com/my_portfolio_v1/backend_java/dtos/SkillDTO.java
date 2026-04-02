@@ -7,6 +7,6 @@ public class SkillDTO {
     private Long id;
     private String name;
     private Integer level;
-
-    // Getters and Setters omitted for brevity
+    private Long categoryId;
+    private String categoryName;
 }

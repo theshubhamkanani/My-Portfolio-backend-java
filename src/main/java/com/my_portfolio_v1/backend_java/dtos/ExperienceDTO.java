@@ -1,6 +1,8 @@
 package com.my_portfolio_v1.backend_java.dtos;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.*;
+
 import java.util.List;
 
 @Data
@@ -14,13 +16,11 @@ public class ExperienceDTO {
     private String companyLogoUrl;
     private String location;
     private String description;
-
-    // Formatted dates (e.g., "April 2025")
     private String startDate;
-    private String endDate;   // Will be "Present" if isCurrentJob is true
-
+    private String endDate;
     private boolean isCurrentJob;
+    private Long profileId;
 
-    // A simple list of skill names for the frontend tags
-    private List<String> technologies;
+    @JsonAlias("technologies")
+    private List<String> skills;
 }

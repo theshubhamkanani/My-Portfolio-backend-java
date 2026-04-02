@@ -16,11 +16,8 @@ public class Highlight {
     private Long id;
 
     @Column(nullable = false)
-    private String text; // e.g., "Proven Track Record in Scalable Systems"
+    private String text;
 
-    private String iconName; // e.g., "check-circle"
-
-    // Each highlight points back to the Profile it belongs to
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "profile_id")
     private Profile profile;

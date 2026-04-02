@@ -1,26 +1,27 @@
 package com.my_portfolio_v1.backend_java.services;
 
+import com.my_portfolio_v1.backend_java.dtos.ContactMessageAdminDTO;
 import com.my_portfolio_v1.backend_java.dtos.ContactMessageDTO;
 import com.my_portfolio_v1.backend_java.models.ContactMessage;
 import com.my_portfolio_v1.backend_java.repositories.ContactMessageRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
+import org.springframework.data.domain.Sort;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.util.FileCopyUtils;
-
-import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
-import java.util.List;
+import org.springframework.util.FileCopyUtils;
 
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class ContactMessageService {
 
     private final ContactMessageRepository repository;
@@ -32,83 +33,107 @@ public class ContactMessageService {
     @Value("${spring.mail.username}")
     private String senderEmail;
 
-    // Pulls from .env, but defaults to localhost if the variable is missing
     @Value("${portfolio.domain.link:http://localhost:3000}")
     private String domainLink;
 
-    @Value("classpath:email-template.txt")
+    @Value("classpath:templates/email-template.txt")
     private Resource userEmailTemplate;
 
-    @Value("classpath:admin-email-template.txt")
+    @Value("classpath:templates/admin-email-template.txt")
     private Resource adminEmailTemplate;
 
-    @Autowired
-    public ContactMessageService(ContactMessageRepository repository, JavaMailSender mailSender) {
-        this.repository = repository;
-        this.mailSender = mailSender;
+    @Transactional
+    public void submitMessage(ContactMessageDTO dto) {
+        ContactMessage savedMessage = repository.save(buildMessage(dto));
+        sendNotificationEmails(savedMessage);
     }
 
-    public void processAndSaveMessage(ContactMessageDTO dto) {
-        ContactMessage message = new ContactMessage();
-        message.setName(dto.getName());
-        message.setEmail(dto.getEmail());
-        message.setReason(dto.getReason());
-        message.setDescription(dto.getDescription());
+    @Transactional(readOnly = true)
+    public List<ContactMessageAdminDTO> getAllMessages(String search) {
+        String normalizedSearch = normalize(search);
 
-        repository.save(message);
+        List<ContactMessage> messages = normalizedSearch.isBlank()
+                ? repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
+                : repository.findByEmailContainingIgnoreCaseOrReasonContainingIgnoreCaseOrderByCreatedAtDesc(
+                normalizedSearch,
+                normalizedSearch
+        );
+
+        return messages.stream()
+                .map(this::mapToAdminDTO)
+                .toList();
     }
 
     @Async
-    public void sendNotificationEmails(ContactMessageDTO dto) {
-        sendEmailToAdmin(dto);
-        sendEmailToUser(dto);
+    public void sendNotificationEmails(ContactMessage message) {
+        sendEmailToAdmin(message);
+        sendEmailToUser(message);
     }
 
-    private void sendEmailToAdmin(ContactMessageDTO dto) {
-        try (Reader reader = new InputStreamReader(adminEmailTemplate.getInputStream(), StandardCharsets.UTF_8)) {
-            String templateContent = FileCopyUtils.copyToString(reader);
+    private ContactMessage buildMessage(ContactMessageDTO dto) {
+        ContactMessage message = new ContactMessage();
+        message.setName(normalize(dto.getName()));
+        message.setEmail(normalize(dto.getEmail()));
+        message.setReason(normalize(dto.getReason()));
+        message.setDescription(normalize(dto.getDescription()));
+        return message;
+    }
 
-            // Chain the replace methods to swap all placeholders
-            String finalBody = templateContent
-                    .replace("{{name}}", dto.getName())
-                    .replace("{{reason}}", dto.getReason())
-                    .replace("{{description}}", dto.getDescription())
-                    .replace("{{email}}", dto.getEmail())
+    private ContactMessageAdminDTO mapToAdminDTO(ContactMessage message) {
+        return ContactMessageAdminDTO.builder()
+                .id(message.getId())
+                .name(message.getName())
+                .email(message.getEmail())
+                .reason(message.getReason())
+                .description(message.getDescription())
+                .createdAt(message.getCreatedAt())
+                .build();
+    }
+
+    private void sendEmailToAdmin(ContactMessage message) {
+        try {
+            String finalBody = readTemplate(adminEmailTemplate)
+                    .replace("{{name}}", message.getName())
+                    .replace("{{reason}}", message.getReason())
+                    .replace("{{description}}", message.getDescription())
+                    .replace("{{email}}", message.getEmail())
                     .replace("{{domain_link}}", domainLink);
 
             SimpleMailMessage mail = new SimpleMailMessage();
             mail.setFrom(senderEmail);
             mail.setTo(adminEmail);
-            mail.setSubject("New Portfolio Contact: " + dto.getReason());
+            mail.setSubject("New Portfolio Contact: " + message.getReason());
             mail.setText(finalBody);
             mailSender.send(mail);
         } catch (Exception e) {
-            System.err.println("Failed to read admin template or send email: " + e.getMessage());
+            System.err.println("Failed to send admin contact email: " + e.getMessage());
         }
     }
 
-    private void sendEmailToUser(ContactMessageDTO dto) {
-        try (Reader reader = new InputStreamReader(userEmailTemplate.getInputStream(), StandardCharsets.UTF_8)) {
-            String templateContent = FileCopyUtils.copyToString(reader);
-
-            String finalBody = templateContent
-                    .replace("{{name}}", dto.getName())
-                    .replace("{{reason}}", dto.getReason());
+    private void sendEmailToUser(ContactMessage message) {
+        try {
+            String finalBody = readTemplate(userEmailTemplate)
+                    .replace("{{name}}", message.getName())
+                    .replace("{{reason}}", message.getReason());
 
             SimpleMailMessage mail = new SimpleMailMessage();
             mail.setFrom(senderEmail);
-            mail.setTo(dto.getEmail());
+            mail.setTo(message.getEmail());
             mail.setSubject("Thank you for reaching out!");
             mail.setText(finalBody);
             mailSender.send(mail);
         } catch (Exception e) {
-            System.err.println("Failed to read user template or send email: " + e.getMessage());
+            System.err.println("Failed to send user confirmation email: " + e.getMessage());
         }
     }
 
-    @Transactional(readOnly = true)
-    public List<ContactMessage> getAllMessages() {
-        return repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
+    private String readTemplate(Resource resource) throws Exception {
+        try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
+            return FileCopyUtils.copyToString(reader);
+        }
     }
 
+    private String normalize(String value) {
+        return value == null ? "" : value.trim();
+    }
 }

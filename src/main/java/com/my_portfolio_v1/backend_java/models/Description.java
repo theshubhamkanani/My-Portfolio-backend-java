@@ -18,9 +18,12 @@ public class Description {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String text;
 
-    // This is the missing field!
     @Column(nullable = false)
     private String type;
+
+    @Builder.Default
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean live = false;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "profile_id")

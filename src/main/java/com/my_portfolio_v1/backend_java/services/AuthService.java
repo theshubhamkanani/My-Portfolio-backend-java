@@ -1,15 +1,17 @@
 package com.my_portfolio_v1.backend_java.services;
 
 import com.my_portfolio_v1.backend_java.config.JwtUtil;
-import com.my_portfolio_v1.backend_java.dtos.AuthResponse;
 import com.my_portfolio_v1.backend_java.dtos.LoginRequest;
 import com.my_portfolio_v1.backend_java.models.User;
 import com.my_portfolio_v1.backend_java.repositories.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -20,23 +22,30 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
 
-    public AuthResponse login(LoginRequest request) {
-        // This triggers the CustomUserDetailsService we wrote earlier
+    public String loginAdmin(LoginRequest request) {
+        String email = request.getEmail().trim().toLowerCase(Locale.ROOT);
+
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
-                        request.getEmail(),
+                        email,
                         request.getPassword()
                 )
         );
 
-        // If no exception was thrown, the user is valid
-        String token = jwtUtil.generateToken(request.getEmail());
-        return new AuthResponse(token);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BadCredentialsException("Invalid credentials."));
+
+        String role = normalizeRole(user.getDesignation());
+
+        if (!role.equals("ADMIN") && !role.equals("SUPER_ADMIN")) {
+            throw new BadCredentialsException("Invalid credentials.");
+        }
+
+        return jwtUtil.generateToken(email);
     }
 
     public User registerAdmin(User user) {
         user.setPassword(passwordEncoder.encode(user.getPassword()));
-        // Match the "ROLE_ADMIN" naming convention used in SecurityConfig
         user.setDesignation("ADMIN");
         return userRepository.save(user);
     }
@@ -45,5 +54,17 @@ public class AuthService {
         user.setPassword(passwordEncoder.encode(user.getPassword()));
         user.setDesignation("USER");
         return userRepository.save(user);
+    }
+
+    private String normalizeRole(String rawRole) {
+        if (rawRole == null || rawRole.isBlank()) {
+            return "";
+        }
+
+        return rawRole.trim()
+                .toUpperCase(Locale.ROOT)
+                .replace("ROLE_", "")
+                .replace(" ", "_")
+                .replace("-", "_");
     }
 }

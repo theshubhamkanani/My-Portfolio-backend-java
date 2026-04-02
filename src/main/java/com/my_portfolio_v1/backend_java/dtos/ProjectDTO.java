@@ -1,6 +1,8 @@
 package com.my_portfolio_v1.backend_java.dtos;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.*;
+
 import java.util.List;
 
 @Data
@@ -9,21 +11,17 @@ import java.util.List;
 @AllArgsConstructor
 public class ProjectDTO {
     private Long id;
-    private String title;
+    private String projectName;
+    private String organizationName;
     private String designation;
-    private String associatedWith;
     private String description;
-
-    // Links
     private String githubLink;
     private String liveLink;
-
-    // Formatted dates (e.g., "June 2024")
     private String startDate;
     private String endDate;
-
     private boolean isCurrentProject;
+    private Long profileId;
 
-    // Placeholder for the frontend tags
-    private List<String> technologies;
+    @JsonAlias("technologies")
+    private List<String> skills;
 }
