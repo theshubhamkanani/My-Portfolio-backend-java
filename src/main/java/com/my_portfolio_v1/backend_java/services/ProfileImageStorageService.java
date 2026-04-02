@@ -1,6 +1,8 @@
 package com.my_portfolio_v1.backend_java.services;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -8,105 +10,80 @@ import org.springframework.web.server.ResponseStatusException;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 @Service
+@RequiredArgsConstructor
 public class ProfileImageStorageService {
 
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024L;
     private static final int MAX_IMAGE_WIDTH = 5000;
     private static final int MAX_IMAGE_HEIGHT = 5000;
+    private static final String CLOUDINARY_FOLDER = "portfolio/profile-images";
 
     private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
             "image/jpeg",
             "image/png"
     );
 
-    private final Path profileImagesRoot;
-
-    public ProfileImageStorageService(@Value("${app.upload.dir:uploads}") String uploadDir) {
-        try {
-            this.profileImagesRoot = Paths.get(uploadDir, "profile-images")
-                    .toAbsolutePath()
-                    .normalize();
-            Files.createDirectories(this.profileImagesRoot);
-        } catch (IOException exception) {
-            throw new IllegalStateException("Unable to initialize upload directory.", exception);
-        }
-    }
+    private final Cloudinary cloudinary;
 
     public String storeProfileImage(MultipartFile file) {
         validateFile(file);
 
-        BufferedImage image = readImage(file);
-        String format = resolveFormat(file.getContentType());
-        String extension = "png".equals(format) ? ".png" : ".jpg";
+        byte[] imageBytes = readAndValidateImageBytes(file);
+        String publicId = "profile-" + UUID.randomUUID();
 
-        String fileName = "profile-" + UUID.randomUUID() + extension;
-        Path targetFile = profileImagesRoot.resolve(fileName).normalize();
+        try {
+            Map<?, ?> uploadResult = cloudinary.uploader().upload(
+                    imageBytes,
+                    ObjectUtils.asMap(
+                            "folder", CLOUDINARY_FOLDER,
+                            "public_id", publicId,
+                            "resource_type", "image",
+                            "overwrite", true,
+                            "unique_filename", false,
+                            "use_filename", false
+                    )
+            );
 
-        if (!targetFile.startsWith(profileImagesRoot)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid file path.");
-        }
-
-        try (OutputStream outputStream = Files.newOutputStream(targetFile)) {
-            boolean written = ImageIO.write(image, format, outputStream);
-
-            if (!written) {
+            Object secureUrl = uploadResult.get("secure_url");
+            if (secureUrl == null) {
                 throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "Unable to process image format."
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Cloud image URL was not returned."
                 );
             }
-        } catch (IOException exception) {
+
+            return secureUrl.toString();
+        } catch (Exception exception) {
             throw new ResponseStatusException(
                     HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Unable to store image right now."
+                    "Unable to upload image right now."
             );
         }
-
-        return "/uploads/profile-images/" + fileName;
     }
 
     public void deleteManagedProfileImage(String fileUrl) {
-        if (fileUrl == null || fileUrl.isBlank()) {
-            return;
-        }
-
-        String marker = "/uploads/profile-images/";
-        int markerIndex = fileUrl.indexOf(marker);
-
-        if (markerIndex < 0) {
-            return;
-        }
-
-        String fileName = fileUrl.substring(markerIndex + marker.length());
-        int queryIndex = fileName.indexOf('?');
-
-        if (queryIndex >= 0) {
-            fileName = fileName.substring(0, queryIndex);
-        }
-
-        if (fileName.isBlank() || fileName.contains("/") || fileName.contains("\\")) {
-            return;
-        }
-
-        Path targetFile = profileImagesRoot.resolve(fileName).normalize();
-        if (!targetFile.startsWith(profileImagesRoot)) {
+        String publicId = extractManagedPublicId(fileUrl);
+        if (publicId == null) {
             return;
         }
 
         try {
-            Files.deleteIfExists(targetFile);
-        } catch (IOException ignored) {
+            cloudinary.uploader().destroy(
+                    publicId,
+                    ObjectUtils.asMap(
+                            "resource_type", "image",
+                            "invalidate", true
+                    )
+            );
+        } catch (Exception ignored) {
         }
     }
 
@@ -128,9 +105,10 @@ public class ProfileImageStorageService {
         }
     }
 
-    private BufferedImage readImage(MultipartFile file) {
-        try (InputStream inputStream = file.getInputStream()) {
-            BufferedImage image = ImageIO.read(inputStream);
+    private byte[] readAndValidateImageBytes(MultipartFile file) {
+        try {
+            byte[] bytes = file.getBytes();
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
 
             if (image == null) {
                 throw new ResponseStatusException(
@@ -146,7 +124,7 @@ public class ProfileImageStorageService {
                 );
             }
 
-            return image;
+            return bytes;
         } catch (IOException exception) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -155,11 +133,43 @@ public class ProfileImageStorageService {
         }
     }
 
-    private String resolveFormat(String contentType) {
-        if ("image/png".equalsIgnoreCase(contentType)) {
-            return "png";
+    private String extractManagedPublicId(String fileUrl) {
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return null;
         }
 
-        return "jpg";
+        if (!fileUrl.contains("/res.cloudinary.com/") || !fileUrl.contains("/image/upload/")) {
+            return null;
+        }
+
+        int uploadIndex = fileUrl.indexOf("/image/upload/");
+        if (uploadIndex < 0) {
+            return null;
+        }
+
+        String path = fileUrl.substring(uploadIndex + "/image/upload/".length());
+
+        int queryIndex = path.indexOf('?');
+        if (queryIndex >= 0) {
+            path = path.substring(0, queryIndex);
+        }
+
+        if (path.startsWith("v")) {
+            int slashAfterVersion = path.indexOf('/');
+            if (slashAfterVersion > -1) {
+                path = path.substring(slashAfterVersion + 1);
+            }
+        }
+
+        if (!path.startsWith(CLOUDINARY_FOLDER + "/")) {
+            return null;
+        }
+
+        int extensionIndex = path.lastIndexOf('.');
+        if (extensionIndex > 0) {
+            path = path.substring(0, extensionIndex);
+        }
+
+        return path;
     }
 }
