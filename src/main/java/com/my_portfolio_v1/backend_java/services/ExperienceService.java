@@ -133,11 +133,19 @@ public class ExperienceService {
     }
 
     private LocalDate parseDate(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return LocalDate.parse(value);
+    if (value == null || value.isBlank()) {
+        return null;
     }
+
+    String normalized = value.trim();
+
+    if (normalized.matches("\\d{2}/\\d{2}/\\d{4}")) {
+        DateTimeFormatter dayFirstFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+        return LocalDate.parse(normalized, dayFirstFormatter);
+    }
+
+    return LocalDate.parse(normalized);
+}
 
     private ExperienceDTO mapToAdminDTO(Experience experience) {
         return ExperienceDTO.builder()
